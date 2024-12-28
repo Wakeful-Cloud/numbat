@@ -55,7 +55,7 @@ impl AcceptsPrefix {
 
 /// The spans associated with an alias passed to `@aliases`
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct AliasSpanInfo {
+pub struct AliasSpanInfo {
     /// The span of the name to which the alias refers
     pub(crate) name_span: Span,
     /// The span of the alias itself (in an `@aliases` decorator)
