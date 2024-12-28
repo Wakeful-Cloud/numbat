@@ -1928,7 +1928,7 @@ impl TypeChecker {
         Ok(checked_statements)
     }
 
-    pub(crate) fn registry(&self) -> &DimensionRegistry {
+    pub fn registry(&self) -> &DimensionRegistry {
         &self.registry
     }
 

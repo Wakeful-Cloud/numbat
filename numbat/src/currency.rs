@@ -3,7 +3,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use numbat_exchange_rates::parse_exchange_rates;
 
 #[derive(Debug)]
-pub(crate) enum ExchangeRates {
+pub enum ExchangeRates {
     Real(numbat_exchange_rates::ExchangeRates),
     TestRates,
 }

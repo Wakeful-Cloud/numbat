@@ -525,7 +525,7 @@ impl BytecodeInterpreter {
         result
     }
 
-    pub(crate) fn set_debug(&mut self, activate: bool) {
+    pub fn set_debug(&mut self, activate: bool) {
         self.vm.set_debug(activate);
     }
 

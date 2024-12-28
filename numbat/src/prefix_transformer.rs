@@ -11,7 +11,7 @@ use crate::{
 type Result<T> = std::result::Result<T, NameResolutionError>;
 
 #[derive(Debug, Clone)]
-pub(crate) struct Transformer {
+pub struct Transformer {
     pub prefix_parser: PrefixParser,
 
     pub variable_names: Vec<CompactString>,
