@@ -587,68 +587,50 @@ impl Context {
         &mut self.resolver
     }
 
-    pub fn interpret<'a>(
+    pub fn transaction<T, E>(
         &mut self,
-        code: &'a str,
-        code_source: CodeSource,
-    ) -> Result<(Vec<typed_ast::Statement<'a>>, InterpreterResult)> {
-        self.interpret_with_settings(&mut InterpreterSettings::default(), code, code_source)
-    }
-
-    pub fn interpret_with_settings<'a>(
-        &mut self,
-        settings: &mut InterpreterSettings,
-        code: &'a str,
-        code_source: CodeSource,
-    ) -> Result<(Vec<typed_ast::Statement<'a>>, InterpreterResult)> {
-        let statements = self
-            .resolver
-            .resolve(code, code_source.clone())
-            .map_err(NumbatError::ResolverError)?;
-
+        callback: impl FnOnce(&mut Self) -> std::result::Result<T, E>,
+    ) -> std::result::Result<T, E> {
         let prefix_transformer_old = self.prefix_transformer.clone();
+        let typechecker_old = self.typechecker.clone();
+        let interpreter_old = self.interpreter.clone();
 
-        let result = self
-            .prefix_transformer
-            .transform(statements)
-            .map_err(NumbatError::NameResolutionError);
+        let result = callback(self);
 
         if result.is_err() {
-            // Reset the state of the prefix transformer to what we had before. This is necessary
-            // for REPL use cases where we want to back track from type-check errors.
-            // For example:
-            //
-            //     >>> fn f(h) = 1
-            //     error: identifier clash in definition
-            //         …
-            //     >>> fn f(h_) = 1     # <-- here we want to use 'f' again
-            //
-            self.prefix_transformer = prefix_transformer_old.clone();
+            self.prefix_transformer = prefix_transformer_old;
+            self.typechecker = typechecker_old;
+            self.interpreter = interpreter_old;
         }
 
-        let transformed_statements = result?;
+        result
+    }
 
-        let typechecker_old = self.typechecker.clone();
+    pub fn parse<'a>(
+        &mut self,
+        code: &'a str,
+        code_source: CodeSource,
+    ) -> Result<Vec<typed_ast::Statement<'a>>> {
+        let transformed_statements = self.transaction(|transaction_self| {
+            let statements = transaction_self
+                .resolver
+                .resolve(code, code_source.clone())
+                .map_err(NumbatError::ResolverError)?;
 
-        let result = self
-            .typechecker
-            .check(&transformed_statements)
-            .map_err(|err| NumbatError::TypeCheckError(*err));
+            transaction_self
+                .prefix_transformer
+                .transform(statements)
+                .map_err(NumbatError::NameResolutionError)
+        })?;
+
+        let result = self.transaction(|transaction_self| {
+            transaction_self
+                .typechecker
+                .check(&transformed_statements)
+                .map_err(|err| NumbatError::TypeCheckError(*err))
+        });
 
         if result.is_err() {
-            // Reset the state of the prefix transformer to what we had before. This is necessary
-            // for REPL use cases where we want to back track from type-check errors.
-            // For example:
-            //
-            //     >>> let x: Length = 1s      # <-- here we register the name 'x' before type checking
-            //     Type check error: Incompatible dimensions in variable definition:
-            //         specified dimension: Length
-            //         actual dimension: Time
-            //     >>> let x: Length = 1m      # <-- here we want to use the name 'x' again
-            //
-            self.prefix_transformer = prefix_transformer_old.clone();
-            self.typechecker = typechecker_old.clone();
-
             if self.load_currency_module_on_demand {
                 if let Err(NumbatError::TypeCheckError(TypeCheckError::UnknownIdentifier(
                     _,
@@ -838,42 +820,53 @@ impl Context {
                         // what the module actually defines.
                         self.load_currency_module_on_demand = false;
 
-                        // Now we try to evaluate the user expression again:
-                        return self.interpret_with_settings(settings, code, code_source);
+                        // Now we try to parse the user expression again:
+                        return self.parse(code, code_source);
                     }
                 }
             }
         }
 
-        let typed_statements = result?;
+        Ok(result?)
+    }
 
-        let interpreter_old = self.interpreter.clone();
+    pub fn interpret<'a>(
+        &mut self,
+        code: &'a str,
+        code_source: CodeSource,
+    ) -> Result<(Vec<typed_ast::Statement<'a>>, InterpreterResult)> {
+        self.interpret_with_settings(&mut InterpreterSettings::default(), code, code_source)
+    }
 
-        let result = self.interpreter.interpret_statements(
-            settings,
-            &typed_statements,
-            self.typechecker.registry(),
-        );
+    pub fn interpret_with_settings<'a>(
+        &mut self,
+        settings: &mut InterpreterSettings,
+        code: &'a str,
+        code_source: CodeSource,
+    ) -> Result<(Vec<typed_ast::Statement<'a>>, InterpreterResult)> {
+        let statements = self.parse(code, code_source)?;
+        let result = self.interpret_statements(settings, &statements)?;
 
-        if result.is_err() {
-            // Similar to above: we need to reset the state of the typechecker and the prefix transformer
-            // here for REPL use cases like:
-            //
-            //    >>> let q = 1 / 0
-            //    error: runtime error
-            //     = Division by zero
-            //
-            //    -> 'q' should not be defined, so 'q' properly leads to a "unknown identifier" error
-            //       and another 'let q = …' works as intended.
-            //
-            self.prefix_transformer = prefix_transformer_old;
-            self.typechecker = typechecker_old;
-            self.interpreter = interpreter_old;
-        }
+        Ok((statements, result))
+    }
 
-        let result = result.map_err(|err| NumbatError::RuntimeError(*err))?;
+    pub fn interpret_statements<'a>(
+        &mut self,
+        settings: &mut InterpreterSettings,
+        statements: &[typed_ast::Statement<'a>],
+    ) -> Result<InterpreterResult> {
+        let result = self.transaction(|transaction_self| {
+            transaction_self
+                .interpreter
+                .interpret_statements(
+                    settings,
+                    &statements,
+                    transaction_self.typechecker.registry(),
+                )
+                .map_err(|err| NumbatError::RuntimeError(*err))
+        })?;
 
-        Ok((typed_statements, result))
+        Ok(result)
     }
 
     pub fn print_diagnostic(&self, error: impl ErrorDiagnostic) {
